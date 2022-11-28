@@ -1,8 +1,6 @@
 package blockchain
 
-type Blockchain struct {
-	Blocks []*Block //Blockchain is an array of pointers to Blocks
-}
+
 
 type Block struct {
 	Hash     []byte
@@ -28,16 +26,7 @@ func CreateBlock(data string, prevHash []byte) *Block {
 	return block
 }
 
-/*
-This is a method for a Blockchain struct.
-It adds a new block to the blockchain.
-*/
-func (chain *Blockchain) AddBlock(data string) {
-	prevBlock := chain.Blocks[len(chain.Blocks)-1] //previous block (current last block before adding the new one)
-	new := CreateBlock(data, prevBlock.Hash)
 
-	chain.Blocks = append(chain.Blocks, new) //Adding the new block
-}
 
 /*
 We need a Genesis block due to the fact that each block references to a previous block.
@@ -46,9 +35,3 @@ func Genesis() *Block {
 	return CreateBlock("Genesis", []byte{}) //Genesis block will have an empty slice of bytes as the previous Hash
 }
 
-/*
-We initialize our blockchain with the first block which is the Genesis Block
-*/
-func InitBlockchain() *Blockchain {
-	return &Blockchain{[]*Block{Genesis()}} //we create an array of Blocks with 1 block which is the genesis block
-}
