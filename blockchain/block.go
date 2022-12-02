@@ -76,3 +76,13 @@ func Deserialize(data []byte) *Block {
 
 	return &block
 }
+
+/*
+Function that handles errors making code cleaner
+@parameters: error
+*/
+func Handle(err error) {
+	if err != nil {
+		log.Panic(err)
+	}
+}
