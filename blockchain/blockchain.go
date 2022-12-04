@@ -16,27 +16,31 @@ Blockchain struct
   - Database: pointer to the Badger database
 */
 type Blockchain struct {
-	Blocks   []*Block //Blockchain is an array of pointers to Blocks
+	LastHash []byte
 	Database *badger.DB
 }
 
 /*
-This is a method for a Blockchain struct.
-It adds a new block to the blockchain.
+Struct used to iterate through the blockchain in the database
 */
-func (chain *Blockchain) AddBlock(data string) {
+type BlockchainIterator struct {
+	CurrentHash []byte
+	Database    *badger.DB
+}
+
+/*
+We initialize our blockchain (if it isn't already present) with the first block which is the Genesis Block
+*/
+func InitBlockchain() *Blockchain {
 	var lastHash []byte
 
-	opts := badger.DefaultOptions //DefaultOptions sets a list of recommended options for good performance.
-	opts.Dir = dbPath
-	opts.ValueDir = dbPath
+	opts := badger.DefaultOptions(dbPath) //DefaultOptions sets a list of recommended options for good performance.
 
 	db, err := badger.Open(opts)
-
 	Handle(err)
 
 	//Update allows us to do Read and Write operations. Meanwhile, 'View' is read-only
-	err := db.Update(func(txn *badger.Txn) error { //'func(txn *badger.Txn) error' is a closure (anonymous function) which has a pointer to a badger transaction and returns an error if it is occurred
+	err = db.Update(func(txn *badger.Txn) error { //'func(txn *badger.Txn) error' is a closure (anonymous function) which has a pointer to a badger transaction and returns an error if it is occurred
 		/*
 			1) check if the blockchain has already been stored in the database
 			oss the '_' is blank identifier and avoids to declare all returned variables of the function. It allows us to call a function and not have to use one or more return values
@@ -60,21 +64,112 @@ func (chain *Blockchain) AddBlock(data string) {
 
 			//Setting new data in the database: setting last hash to the genesis block hash
 			err = txn.Set([]byte("lh"), genesis.Hash)
-			Handle(err)
 
 			lastHash = genesis.Hash
 
 			return err
 		} else { //If the database already exists
+			item, err := txn.Get([]byte("lh")) //Get the last hash from the db
+			Handle(err)
 
+			err = item.Value(func(val []byte) error {
+				lastHash = append([]byte{}, val...)
+
+				return nil
+			})
+
+			return err
 		}
-
 	})
+
+	Handle(err)
+
+	blockchain := Blockchain{lastHash, db}
+	return &blockchain
 }
 
 /*
-We initialize our blockchain with the first block which is the Genesis Block
+This is a method for a Blockchain struct.
+It adds a new block to the blockchain.
 */
-func InitBlockchain() *Blockchain {
-	return &Blockchain{[]*Block{Genesis()}} //we create an array of Blocks with 1 block which is the genesis block
+func (chain *Blockchain) AddBlock(data string) {
+	var lastHash []byte
+
+	err := chain.Database.View(func(txn *badger.Txn) error { //Read-only transaction to the db
+		item, err := txn.Get([]byte("lh"))
+		Handle(err)
+
+		err = item.Value(func(val []byte) error {
+			lastHash = append([]byte{}, val...)
+
+			return nil
+		})
+
+		return err
+	})
+
+	Handle(err)
+
+	newBlock := CreateBlock(data, lastHash)
+
+	//Now we need to add the block to the database
+	//and update the last hash in the database
+	err = chain.Database.Update(func(txn *badger.Txn) error {
+		err := txn.Set(newBlock.Hash, newBlock.Serialize())
+		Handle(err)
+
+		err = txn.Set([]byte("lh"), newBlock.Hash)
+
+		chain.LastHash = newBlock.Hash
+
+		return err
+	})
+
+	Handle(err)
+}
+
+/* ------------------ ITERATOR METHODS ------------------- */
+/*
+Function for the Blockchain struct
+Iterator needed to go through the blocks in the blockchain saved in the DB
+
+@returns Pointer to a blochcian iterator which is an iterator for our blockchain
+*/
+func (chain *Blockchain) Iterator() *BlockchainIterator {
+	iter := &BlockchainIterator{chain.LastHash, chain.Database}
+
+	return iter
+}
+
+/*
+We want to iterate 'backwords'. Which means that we are iterating from the most recent block to the oldest (Genesis block)
+@returns a pointer to the next block in the blockchain
+*/
+func (iter *BlockchainIterator) Next() *Block {
+	var block *Block
+
+	err := iter.Database.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(iter.CurrentHash)
+
+		var encodedBlock []byte
+
+		err = item.Value(func(val []byte) error { //Since Badger 1.6.0 we need to get the value this way and not with simple 'Value()'
+			encodedBlock = append([]byte{}, val...)
+
+			return nil
+		})
+
+		//Alternative to Value()  you could also use item.ValueCopy().
+		//ex: encodedBlock, err = item.ValueCopy(nil)
+
+		block = Deserialize(encodedBlock)
+
+		return err
+	})
+
+	Handle(err)
+
+	iter.CurrentHash = block.PrevHash //We are now chaning the iterator to the previous block
+
+	return block
 }
