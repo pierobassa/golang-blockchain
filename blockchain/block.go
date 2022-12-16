@@ -7,10 +7,10 @@ import (
 )
 
 type Block struct {
-	Hash     []byte
-	Data     []byte
-	PrevHash []byte
-	Nonce    int //The nonce is the number that blockchain miners are solving for.
+	Hash         []byte
+	Transactions []*Transaction //Array of transactions. A block may contain many transactions
+	PrevHash     []byte
+	Nonce        int //The nonce is the number that blockchain miners are solving for.
 }
 
 /*
