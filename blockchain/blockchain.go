@@ -1,13 +1,18 @@
 package blockchain
 
 import (
+	"encoding/hex"
 	"fmt"
 	"github.com/dgraph-io/badger"
+	"os"
+	"runtime"
 )
 
 // Path of the database
 const (
-	dbPath = "./tmp/blocks"
+	dbPath      = "./tmp/blocks"
+	dbFile      = "./tmp/blocks/MANIFEST" //to verify if the blockchain db exists (BadgerDB creates this file on initialization of the DB)
+	genesisData = "First Transaction from Genesis"
 )
 
 /*
@@ -28,11 +33,60 @@ type BlockchainIterator struct {
 	Database    *badger.DB
 }
 
+func DBExists() bool {
+	if _, err := os.Stat(dbFile); os.IsNotExist(err) {
+		return false
+	}
+
+	return true
+}
+
+func ContinueBlockchain(address string) *Blockchain {
+	if DBExists() == false {
+		fmt.Println("No existing blockchain found, create one!")
+		runtime.Goexit()
+	}
+
+	var lastHash []byte
+
+	opts := badger.DefaultOptions(dbPath) //DefaultOptions sets a list of recommended options for good performance.
+
+	db, err := badger.Open(opts)
+	Handle(err)
+
+	err = db.Update(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte("lh"))
+		Handle(err)
+
+		err = item.Value(func(val []byte) error {
+			lastHash = append([]byte{}, val...)
+
+			return nil
+		})
+
+		return err
+	})
+
+	Handle(err)
+
+	blockchain := Blockchain{lastHash, db}
+
+	return &blockchain
+}
+
 /*
 We initialize our blockchain (if it isn't already present) with the first block which is the Genesis Block
+
+@param 'address': address of who inits the blockchain
 */
-func InitBlockchain() *Blockchain {
+func InitBlockchain(address string) *Blockchain {
 	var lastHash []byte
+
+	//Check if DB already exists
+	if DBExists() {
+		fmt.Println("Blockchain already exists! No need to init the blockchain again")
+		runtime.Goexit()
+	}
 
 	opts := badger.DefaultOptions(dbPath) //DefaultOptions sets a list of recommended options for good performance.
 
@@ -42,44 +96,26 @@ func InitBlockchain() *Blockchain {
 	//Update allows us to do Read and Write operations. Meanwhile, 'View' is read-only
 	err = db.Update(func(txn *badger.Txn) error { //'func(txn *badger.Txn) error' is a closure (anonymous function) which has a pointer to a badger transaction and returns an error if it is occurred
 		/*
-			1) check if the blockchain has already been stored in the database
-			oss the '_' is blank identifier and avoids to declare all returned variables of the function. It allows us to call a function and not have to use one or more return values
-
-			2) If there is a blockchain there then we will create a new blockchain instance in memory and we'll get the last hash of the last block in the blockchain
-			The last hash is important because that's how we derive a new block's hash
-
-			3) If there is no existing blockchain in the database we'll create the Genesis block and store it in the database
-			 next we'll save the genesis' block's hash as the last block hash (lastHash) in the database
-			 then we'll create a new blockchain instance with the lastHash pointing towards the Gensis block
+		 We'll create the Genesis block and store it in the database
+		 next we'll save the genesis' block's hash as the last block hash (lastHash) in the database
 		*/
 
 		//we are getting the value of the last hash which we save last hash in the db with 'lh'
-		if _, err := txn.Get([]byte("lh")); err == badger.ErrKeyNotFound { //if the error is equal to ErrKeyNotFound then the blockchain doesn't exist in the database
-			fmt.Println("No existing blockchain found")
-			genesis := Genesis()
-			fmt.Println("Genesis proved")
+		cbtx := CoinbaseTx(address, genesisData) //Coinbase tx (address is the address that will mine the genesis block and be rewarded the 100 tokens)
+		genesis := Genesis(cbtx)
 
-			err = txn.Set(genesis.Hash, genesis.Serialize()) //We are adding the genesis block to the database with key=genesis' block hash and value=genesis block serialized as slice of bytes
-			Handle(err)
+		fmt.Println("Genesis created!")
 
-			//Setting new data in the database: setting last hash to the genesis block hash
-			err = txn.Set([]byte("lh"), genesis.Hash)
+		//Adding block to the DB
+		err = txn.Set(genesis.Hash, genesis.Serialize())
+		Handle(err)
 
-			lastHash = genesis.Hash
+		//Setting the last hash in the DB
+		err = txn.Set([]byte("lh"), genesis.Hash)
 
-			return err
-		} else { //If the database already exists
-			item, err := txn.Get([]byte("lh")) //Get the last hash from the db
-			Handle(err)
+		lastHash = genesis.Hash
 
-			err = item.Value(func(val []byte) error {
-				lastHash = append([]byte{}, val...)
-
-				return nil
-			})
-
-			return err
-		}
+		return err
 	})
 
 	Handle(err)
@@ -92,7 +128,7 @@ func InitBlockchain() *Blockchain {
 This is a method for a Blockchain struct.
 It adds a new block to the blockchain.
 */
-func (chain *Blockchain) AddBlock(data string) {
+func (chain *Blockchain) AddBlock(transactions []*Transaction) {
 	var lastHash []byte
 
 	err := chain.Database.View(func(txn *badger.Txn) error { //Read-only transaction to the db
@@ -110,7 +146,7 @@ func (chain *Blockchain) AddBlock(data string) {
 
 	Handle(err)
 
-	newBlock := CreateBlock(data, lastHash)
+	newBlock := CreateBlock(transactions, lastHash)
 
 	//Now we need to add the block to the database
 	//and update the last hash in the database
@@ -172,4 +208,75 @@ func (iter *BlockchainIterator) Next() *Block {
 	iter.CurrentHash = block.PrevHash //We are now chaning the iterator to the previous block
 
 	return block
+}
+
+/*
+Finds transactions that have outputs NOT referenced by inputs of other transactions.
+These are important because if an input hasn't been spent that means that there are tokens that still exist
+for a certain user.
+
+# By summing the unspent transactions for a user we can know his balance of tokens
+
+@param: address: the address of the user
+*/
+func (chain *Blockchain) FindUnspentTransactions(address string) []Transaction {
+	var unspentTxs []Transaction
+
+	//spent transaction outputs
+	//Creating a map where the keys are strings and values are array (slice) of Integers.
+	//The array of integers stores the indexes of the outputs SPENT of the transaction (the key is the Transaction's ID)
+	spentTXOs := make(map[string][]int)
+
+	iter := chain.Iterator()
+
+	for {
+		block := iter.Next()
+
+		//Iterate through the transactions of the current block
+		for _, tx := range block.Transactions {
+			txID := hex.EncodeToString(tx.ID) //into hexadecimal in string format
+
+		Outputs: //label that helps us continue to this for from the inner for loop (the one for the outputs) and not the external for loop
+			for outIdx, out := range tx.Outputs {
+				if spentTXOs[txID] != nil {
+					for _, spentOut := range spentTXOs[txID] {
+						if spentOut == outIdx { //This output is a spent output, it can't be part of the UTXs
+							continue Outputs //we go to the next output
+						}
+					}
+				}
+
+				//if we reach here, the transaction (tx) is an UNSPENT transaction. Now if the user with address 'address' can unlock the output transaction then it's his and we add it to the array of unspent tranasactions
+				if out.CanBeUnlocked(address) {
+					unspentTxs = append(unspentTxs, *tx)
+				}
+			}
+
+			//An output is spent if its index is inside a transaction's input
+			if tx.isCoinbase() == false { //a coinbase tx does not have inputs
+				for _, in := range tx.Inputs {
+					if in.CanUnlock(address) {
+						inTxID := hex.EncodeToString(in.ID)
+						spentTXOs[inTxID] = append(spentTXOs[inTxID], in.Out) //Adding the output's index to the key (transaction ID) of the map
+					}
+				}
+			}
+		}
+
+		if len(block.PrevHash) == 0 { //if we reach genesis block
+			break
+		}
+	}
+
+	return unspentTxs
+}
+
+/*
+Finds the Unspent Transaction Outputs of a given address
+*/
+func (chain *Blockchain) FindUTXO(address string) []TxOutput {
+	var UTXOs []TxOutput
+	unspentTransactions := chain.FindUnspentTransactions(address)
+
+	return UTXOs
 }
