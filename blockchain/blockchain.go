@@ -276,7 +276,50 @@ Finds the Unspent Transaction Outputs of a given address
 */
 func (chain *Blockchain) FindUTXO(address string) []TxOutput {
 	var UTXOs []TxOutput
-	unspentTransactions := chain.FindUnspentTransactions(address)
+	unspentTxs := chain.FindUnspentTransactions(address)
+
+	for _, tx := range unspentTxs {
+		for _, out := range tx.Outputs {
+			if out.CanBeUnlocked(address) { //If the output is unlockable by the address then it is a UTXO of that address
+				UTXOs = append(UTXOs, out)
+			}
+		}
+	}
 
 	return UTXOs
+}
+
+/*
+This method enables creating normal transactions and not only Coinbase transactions.
+To send tokens from one account to another, we need to find the unspent outputs and assure they have enough tokens inside of them.
+
+@param: address -> address we want to check
+@param: amount -> the amount we want to send (transfer)
+
+@returns: tuple of int and a map of (string -> array of ints)
+*/
+func (chain *Blockchain) FindSpendableOutputs(address string, amount int) (int, map[string][]int) {
+	unspentOuts := make(map[string][]int)
+	unspentTxs := chain.FindUnspentTransactions(address)
+
+	accumulated := 0
+
+Work:
+	for _, tx := range unspentTxs {
+		txID := hex.EncodeToString(tx.ID)
+
+		for outIdx, out := range tx.Outputs {
+			if out.CanBeUnlocked(address) && accumulated < amount {
+				accumulated += out.Value
+
+				unspentOuts[txID] = append(unspentOuts[txID], outIdx)
+
+				if accumulated >= amount {
+					break Work //We break from all for loops
+				}
+			}
+		}
+	}
+
+	return accumulated, unspentOuts
 }
