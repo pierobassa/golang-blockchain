@@ -87,3 +87,25 @@ func Checksum(payload []byte) []byte {
 
 	return secondHash[:checksumLength] //returning first n bytes depending on checksum length (usually 4 bytes)
 }
+
+/*
+Creates the Address of a Wallet
+*/
+func (w Wallet) Address() []byte {
+	pubHash := PublicKeyHash(w.PublicKey)
+
+	versionedHash := append([]byte{version}, pubHash...) //concatenating version with the public key hash
+
+	checksum := Checksum(versionedHash)
+
+	fullHash := append(versionedHash, checksum...)
+
+	address := Base58Encode(fullHash)
+
+	//fmt.Printf("NEW WALLET:\n")
+	//fmt.Printf("Public key: %x\n", w.PublicKey)
+	//fmt.Printf("Public key hash: %x\n", pubHash)
+	//fmt.Printf("Address created: %s\n", address)
+
+	return address
+}

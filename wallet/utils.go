@@ -6,6 +6,7 @@ import (
 )
 
 /* ------------------- ENCODE & DECODE w/ Base58 ------------------- */
+
 func Base58Encode(input []byte) []byte {
 	encode := base58.Encode(input)
 

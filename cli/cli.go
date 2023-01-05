@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/dgraph-io/badger"
+	"github.com/pierobassa/golang-blockchain/wallet"
 	"log"
 	"os"
 	"runtime"
@@ -24,6 +25,8 @@ func (cli *CommandLine) printUsage() {
 	fmt.Println(" createblockchain -address ADDRESS -> creates a blockchain")
 	fmt.Println(" printchain -> prints the blocks in the chain")
 	fmt.Println(" send -from FROM -to TO -amount AMOUNT -> sends AMOUNT from FROM to TO")
+	fmt.Println(" createwalllet -> creates a new Wallet")
+	fmt.Println(" listaddresses -> Lists all of the addresses of wallets stored")
 }
 
 func (cli *CommandLine) validateArgs() {
@@ -36,6 +39,24 @@ func (cli *CommandLine) validateArgs() {
 		//Badger DB has a downside which is it has to garbage collect the values and keys before it shuts down. So if we shut down the application without
 		//properly closing the database it can corrupt the data.
 	}
+}
+
+func (cli *CommandLine) listAddresses() {
+	wallets, _ := wallet.CreateWallets()
+	addresses := wallets.GetAllAddresses()
+
+	for _, address := range addresses {
+		fmt.Println(address)
+	}
+}
+
+func (cli *CommandLine) createWallet() {
+	wallets, _ := wallet.CreateWallets()
+	address := wallets.AddWallet()
+
+	wallets.SaveFile()
+
+	fmt.Printf("New address is: %s\n", address)
 }
 
 func (cli *CommandLine) printChain() {
@@ -120,6 +141,8 @@ func (cli *CommandLine) Run() {
 	createBlockchainCmd := flag.NewFlagSet("createblockchain", flag.ExitOnError)
 	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
 	printChainCmd := flag.NewFlagSet("printchain", flag.ExitOnError)
+	createWalletCmd := flag.NewFlagSet("createwallet", flag.ExitOnError)
+	listAddressesCmd := flag.NewFlagSet("listaddresses", flag.ExitOnError)
 
 	getBalanceAddress := getBalanceCmd.String("address", "", "The address to get balance for")
 	createBlockchainAddress := createBlockchainCmd.String("address", "", "The address to send genesis block reward to")
@@ -145,6 +168,16 @@ func (cli *CommandLine) Run() {
 		}
 	case "send":
 		err := sendCmd.Parse(os.Args[2:])
+		if err != nil {
+			log.Panic(err)
+		}
+	case "createwallet":
+		err := createWalletCmd.Parse(os.Args[2:])
+		if err != nil {
+			log.Panic(err)
+		}
+	case "listaddresses":
+		err := listAddressesCmd.Parse(os.Args[2:])
 		if err != nil {
 			log.Panic(err)
 		}
@@ -182,4 +215,11 @@ func (cli *CommandLine) Run() {
 		cli.printChain()
 	}
 
+	if createWalletCmd.Parsed() {
+		cli.createWallet()
+	}
+
+	if listAddressesCmd.Parsed() {
+		cli.listAddresses()
+	}
 }
